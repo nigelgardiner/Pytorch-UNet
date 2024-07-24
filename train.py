@@ -19,12 +19,10 @@ from unet import UNet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 
-dir_img = Path('./data/imgs/')
-dir_mask = Path('./data/masks/')
-dir_checkpoint = Path('./checkpoints/')
-
-
 def train_model(
+        dir_img: str,
+        dir_mask: str,
+        dir_checkpoint: str,
         model,
         device,
         epochs: int = 5,
@@ -36,13 +34,14 @@ def train_model(
         amp: bool = False,
         weight_decay: float = 1e-8,
         momentum: float = 0.999,
-        gradient_clipping: float = 1.0,
+        gradient_clipping: float = 1.0
 ):
     # 1. Create dataset
-    try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
-    except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+    #try:
+    #    dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+    #except (AssertionError, RuntimeError, IndexError):
+    #    dataset = BasicDataset(dir_img, dir_mask, img_scale)
+    dataset = BasicDataset(dir_img, dir_mask, img_scale)
 
     # 2. Split into train / validation partitions
     n_val = int(len(dataset) * val_percent)
@@ -96,6 +95,8 @@ def train_model(
 
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
+                assert torch.all(true_masks >= 0), "Negative values found in true_masks"
+                assert torch.max(true_masks) < model.n_classes, f"Max value in true_masks ({torch.max(true_masks)}) is not less than num_classes ({model.n_classes})"
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images)
@@ -163,7 +164,7 @@ def train_model(
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
             state_dict = model.state_dict()
             state_dict['mask_values'] = dataset.mask_values
-            torch.save(state_dict, str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
+            torch.save(state_dict, f"{dir_checkpoint}/checkpoint_epoch{epoch}.pth")
             logging.info(f'Checkpoint {epoch} saved!')
 
 
@@ -174,12 +175,16 @@ def get_args():
     parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
-    parser.add_argument('--scale', '-s', type=float, default=0.5, help='Downscaling factor of the images')
+    parser.add_argument('--scale', '-s', type=float, default=1.0, help='Downscaling factor of the images')
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+
+    parser.add_argument('--dir_img', '-i', type=str, help='Image directory')
+    parser.add_argument('--dir_mask', '-m', type=str, help='Mask directory')
+    parser.add_argument('--dir_checkpoint', '-p', type=str, help='Checkpoint directory')
 
     return parser.parse_args()
 
@@ -211,6 +216,9 @@ if __name__ == '__main__':
     model.to(device=device)
     try:
         train_model(
+            dir_img=args.dir_img,
+            dir_mask=args.dir_mask,
+            dir_checkpoint=args.dir_checkpoint,
             model=model,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -227,6 +235,9 @@ if __name__ == '__main__':
         torch.cuda.empty_cache()
         model.use_checkpointing()
         train_model(
+            dir_img=args.dir_img,
+            dir_mask=args.dir_mask,
+            dir_checkpoint=args.dir_checkpoint,
             model=model,
             epochs=args.epochs,
             batch_size=args.batch_size,
